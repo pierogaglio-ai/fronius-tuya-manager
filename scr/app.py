@@ -2,10 +2,10 @@ from flask import Flask, render_template_string, request
 from tuya_connector import TuyaOpenAPI
 
 # Credenziali Tuya
-ACCESS_ID = "xts98pchwtkrg3g94wap"
-ACCESS_SECRET = "5b2536b117bc423ca6fd6876c5c2f16e"
+ACCESS_ID = "tuo access id tuya"
+ACCESS_SECRET = "tuo access secret tuya"
 API_ENDPOINT = "https://openapi.tuyaeu.com"
-DEVICE_ID = "5676087234ab950d580a"
+DEVICE_ID = "tuo devices id tuya"
 
 # Connessione all'API Tuya
 openapi = TuyaOpenAPI(API_ENDPOINT, ACCESS_ID, ACCESS_SECRET)
