@@ -59,8 +59,8 @@ def ComandoPulsante(device_id, command):
 def StatoDispositivi(device_idx):
 
 # Connessione all'API Tuya
-    openapi = TuyaOpenAPI(API_ENDPOINT, ACCESS_ID, ACCESS_SECRET)
-    openapi.connect()
+#    openapi = TuyaOpenAPI(API_ENDPOINT, ACCESS_ID, ACCESS_SECRET)
+#    openapi.connect()
     status = openapi.get(f"/v1.0/iot-03/devices/{device_idx}/status")
 
 # Analisi dello stato di StufaP e Stufa G
