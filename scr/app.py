@@ -8,7 +8,6 @@ import time
 import logging
 import datetime
 
-
 # Configurazione x Inverter Fronius Gen24Plus
 INVERTER_IP = "192.168.1.100"
 
@@ -23,10 +22,31 @@ DEVICES = {
     "StufaP": "tuo devicess id 1 tuya",
     "StufaG": "tuo devicess id 2 tuya"}
 
-
 # Connessione all'API Tuya
 openapi = TuyaOpenAPI(API_ENDPOINT, ACCESS_ID, ACCESS_SECRET)
 openapi.connect()
+
+# Wrapper per richieste Tuya con riconnessione automatica
+def tuya_request_with_reconnect(request_func, *args, max_retries=3, **kwargs):
+    for attempt in range(max_retries):
+        try:
+            return request_func(*args, **kwargs)
+        except Exception as e:
+            print(f"[Tuya] Errore: {e} (tentativo {attempt+1}/{max_retries})")
+            # Personalizza questa condizione se serve: token, auth, rete, ecc.
+            if "token" in str(e).lower() or "auth" in str(e).lower() or attempt == max_retries-1:
+                try:
+                    print("[Tuya] Riconnessione...")
+                    openapi.connect()
+                    time.sleep(1)
+                except Exception as reconn_error:
+                    print(f"[Tuya] Errore nella riconnessione: {reconn_error}")
+                    if attempt == max_retries-1:
+                        raise
+            else:
+                if attempt == max_retries-1:
+                    raise
+                time.sleep(1)
 
 app = Flask(__name__)
 
@@ -40,58 +60,66 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 # --- Funzioni Gestione prese stufe ---
 def ComandoPulsante(device_id, command):
     try:
-        if device_id==DEVICES["StufaG"]: ##if response.status_code == 200:
+        if device_id==DEVICES["StufaG"]:
+            if command=="on":
+                tuya_request_with_reconnect(
+                    openapi.post,
+                    f"/v1.0/iot-03/devices/{DEVICE_ID}/commands",
+                    {"commands": [{"code": "switch_1", "value": True}]}
+                )
+            else:
+                tuya_request_with_reconnect(
+                    openapi.post,
+                    f"/v1.0/iot-03/devices/{DEVICE_ID}/commands",
+                    {"commands": [{"code": "switch_1", "value": False}]}
+                )
 
-           if command=="on":
-              openapi.post(f"/v1.0/iot-03/devices/{DEVICE_ID}/commands", {"commands": [{"code": "switch_1", "value": True}]})
-           else:
-              openapi.post(f"/v1.0/iot-03/devices/{DEVICE_ID}/commands", {"commands": [{"code": "switch_1", "value": False}]})
-
-        if device_id==DEVICES["StufaP"]: ##if response.status_code == 200:
-           if command=="on":
-              openapi.post(f"/v1.0/iot-03/devices/{DEVICE_ID2}/commands", {"commands": [{"code": "switch_1", "value": True}]})
-           else:
-              openapi.post(f"/v1.0/iot-03/devices/{DEVICE_ID2}/commands", {"commands": [{"code": "switch_1", "value": False}]})
+        if device_id==DEVICES["StufaP"]:
+            if command=="on":
+                tuya_request_with_reconnect(
+                    openapi.post,
+                    f"/v1.0/iot-03/devices/{DEVICE_ID2}/commands",
+                    {"commands": [{"code": "switch_1", "value": True}]}
+                )
+            else:
+                tuya_request_with_reconnect(
+                    openapi.post,
+                    f"/v1.0/iot-03/devices/{DEVICE_ID2}/commands",
+                    {"commands": [{"code": "switch_1", "value": False}]}
+                )
 
     except Exception as e:
         print("⚠️ Codice 'switch_1' non trovato, dispositivo forse non rintracciabile")
 
 def StatoDispositivi(device_idx):
-
-# Connessione all'API Tuya
-#    openapi = TuyaOpenAPI(API_ENDPOINT, ACCESS_ID, ACCESS_SECRET)
-#    openapi.connect()
-    status = openapi.get(f"/v1.0/iot-03/devices/{device_idx}/status")
-
-# Analisi dello stato di StufaP e Stufa G
+    status = tuya_request_with_reconnect(
+        openapi.get, f"/v1.0/iot-03/devices/{device_idx}/status"
+    )
+    # Analisi dello stato di StufaP e Stufa G
     for item in status.get("result", []):
         if device_idx==DEVICE_ID2:
             if item["value"] is True:
-                return "🔥 StufaP è ACCESA" #print("🔥 StufaP è ACCESA")
+                return "🔥 StufaP è ACCESA"
             elif item["value"] is False:
-                return "❄️ StufaP è SPENTA" #print("❄️ StufaP è SPENTA")
+                return "❄️ StufaP è SPENTA"
             else:
-                return "⚠️ Stato Stufa P non riconosciuto"  #print("⚠️ Stato non riconosciuto")
+                return "⚠️ Stato Stufa P non riconosciuto"
             break
         elif device_idx==DEVICE_ID:
             if item["value"] is True:
-                return "🔥 StufaG è ACCESA"  #print("🔥 StufaG è ACCESA")
+                return "🔥 StufaG è ACCESA"
             elif item["value"] is False:
-                return "❄️ StufaG è SPENTA"  #print("❄️ StufaG è SPENTA")
+                return "❄️ StufaG è SPENTA"
             else:
-                return "⚠️ Stato Stufa G non riconosciuto"  #print("⚠️ Stato non riconosciuto")
+                return "⚠️ Stato Stufa G non riconosciuto"
             break
-            
     else:
-         return "⚠️ Stato Stufa G non riconosciuto"  #print("⚠️ Stato non riconosciuto")
-#       print("⚠️ Codice 'switch_1' non trovato, dispositivo forse non rintracciabile")
+         return "⚠️ Stato Stufa G non riconosciuto"
 
-
-# --- Automazione --- quando va in automatico, ogno 30 secondi dentro la fascia oraria stabilita,
+# --- Automazione --- quando va in automatico, ogni 30 secondi dentro la fascia oraria stabilita,
 # in base alle soglie di automazione gestisce le due stufe/prese
 
 def automazione_loop():
-
     start_time = datetime.time(11, 0)
     end_time = datetime.time(17, 30)
     while True:
@@ -123,7 +151,7 @@ def automazione_loop():
 
 threading.Thread(target=automazione_loop, daemon=True).start()
 
-# --- API --- preleva i dati di produzione, consumo, immissione in rete, livello di SOC e segnala lo stato dei dispositivi "acceso,spento"
+# --- API ---
 @app.route("/data")
 def get_data():
     url = f"http://{INVERTER_IP}/solar_api/v1/GetPowerFlowRealtimeData.fcgi"
