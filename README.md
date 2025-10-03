@@ -1,2 +1,2 @@
 # fronius gen24-tuya-manager
-piccolo server python con interfaccia web per monitorare un inverter fronius ed attivare dispositivi tuya
+piccolo server python con interfaccia web per monitorare un inverter fronius ed attivare dispositivi tuya, utile per ottimizzare l'autoconsumo, i dispositivi tuya possono essere dei semplici interruttori per accendere stufe, boiler, aria condizionata ecc...
