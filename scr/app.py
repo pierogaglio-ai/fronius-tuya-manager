@@ -1,200 +1,297 @@
-###### versione 2.0 , interroga inverter, usa soglie per attivare stufe, pilota direttamente STUFAG e StufaP collegata a Tuya (smartlife) 
+###### versione 2.1 - ottimizzata per esecuzione continua su Termux in LAN locale
 from flask import Flask, jsonify, render_template_string, request
 from tuya_connector import TuyaOpenAPI
 
-import requests
+import datetime
+import logging
+import os
 import threading
 import time
-import logging
-import datetime
+
+import requests
 
 # Configurazione x Inverter Fronius Gen24Plus
-INVERTER_IP = "192.168.1.100"
+INVERTER_IP = os.getenv("INVERTER_IP", "192.168.1.100")
 
 # Credenziali Tuya e dati dispositivi
-API_ENDPOINT = "https://openapi.tuyaeu.com"
-ACCESS_ID = "tuo access id tuya"
-ACCESS_SECRET = "tuo access secret tuya"
+API_ENDPOINT = os.getenv("TUYA_API_ENDPOINT", "https://openapi.tuyaeu.com")
+ACCESS_ID = os.getenv("TUYA_ACCESS_ID", "tuo access id tuya")
+ACCESS_SECRET = os.getenv("TUYA_ACCESS_SECRET", "tuo access secret tuya")
 
-DEVICE_ID = "tuo devicess id 1 tuya"
-DEVICE_ID2 = "tuo devicess id 2 tuya"
+DEVICE_ID = os.getenv("TUYA_DEVICE_ID_STUFAG", "tuo devicess id 1 tuya")
+DEVICE_ID2 = os.getenv("TUYA_DEVICE_ID_STUFAP", "tuo devicess id 2 tuya")
+
 DEVICES = {
-    "StufaP": "tuo devicess id 1 tuya",
-    "StufaG": "tuo devicess id 2 tuya"}
+    "StufaP": DEVICE_ID2,
+    "StufaG": DEVICE_ID,
+}
+
+# Polling e finestra automazione (ottimizzati per stabilità su Termux)
+POLL_SECONDS = int(os.getenv("POLL_SECONDS", "20"))
+STATUS_REFRESH_SECONDS = int(os.getenv("STATUS_REFRESH_SECONDS", "60"))
+START_HOUR = int(os.getenv("AUTO_START_HOUR", "11"))
+START_MINUTE = int(os.getenv("AUTO_START_MINUTE", "0"))
+END_HOUR = int(os.getenv("AUTO_END_HOUR", "17"))
+END_MINUTE = int(os.getenv("AUTO_END_MINUTE", "30"))
 
 # Connessione all'API Tuya
 openapi = TuyaOpenAPI(API_ENDPOINT, ACCESS_ID, ACCESS_SECRET)
 openapi.connect()
 
-# Wrapper per richieste Tuya con riconnessione automatica
+# Sessione HTTP persistente verso inverter per ridurre overhead rete/CPU
+inverter_session = requests.Session()
+
+app = Flask(__name__)
+
+# Stato runtime condiviso
+runtime_lock = threading.Lock()
+auto_mode = True
+thresholds = {"X": 500, "Y": 1000, "Z": 800, "D": 200}
+
+latest_power_data = {
+    "produzione": 0,
+    "consumo": 0,
+    "rete": 0,
+    "soc": 0,
+    "timestamp": 0,
+}
+
+device_states = {
+    "StufaP": {"is_on": None, "text": "⚠️ Stato StufaP non disponibile"},
+    "StufaG": {"is_on": None, "text": "⚠️ Stato StufaG non disponibile"},
+}
+
+# Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+
+
 def tuya_request_with_reconnect(request_func, *args, max_retries=3, **kwargs):
     for attempt in range(max_retries):
         try:
             return request_func(*args, **kwargs)
         except Exception as e:
-            print(f"[Tuya] Errore: {e} (tentativo {attempt+1}/{max_retries})")
-            # Personalizza questa condizione se serve: token, auth, rete, ecc.
-            if "token" in str(e).lower() or "auth" in str(e).lower() or attempt == max_retries-1:
+            logging.warning("[Tuya] Errore: %s (tentativo %s/%s)", e, attempt + 1, max_retries)
+            if "token" in str(e).lower() or "auth" in str(e).lower() or attempt == max_retries - 1:
                 try:
-                    print("[Tuya] Riconnessione...")
+                    logging.info("[Tuya] Riconnessione...")
                     openapi.connect()
                     time.sleep(1)
                 except Exception as reconn_error:
-                    print(f"[Tuya] Errore nella riconnessione: {reconn_error}")
-                    if attempt == max_retries-1:
+                    logging.error("[Tuya] Errore nella riconnessione: %s", reconn_error)
+                    if attempt == max_retries - 1:
                         raise
+            elif attempt == max_retries - 1:
+                raise
             else:
-                if attempt == max_retries-1:
-                    raise
                 time.sleep(1)
 
-app = Flask(__name__)
 
-device_states = {"StufaP": "unknown", "StufaG": "unknown"}
-auto_mode = True
-thresholds = {"X": 500, "Y": 1000, "Z": 800, "D": 200} # soglie di accensio spegnimento dispositivi Tuya
+def inverter_url():
+    return f"http://{INVERTER_IP}/solar_api/v1/GetPowerFlowRealtimeData.fcgi"
 
-# Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
-# --- Funzioni Gestione prese stufe ---
-def ComandoPulsante(device_id, command):
+def fetch_inverter_data(timeout=4):
+    r = inverter_session.get(inverter_url(), timeout=timeout)
+    data = r.json()
+    site = data["Body"]["Data"]["Site"]
+    inverter = data["Body"]["Data"]["Inverters"].get("1", {})
+    return {
+        "produzione": int(site.get("P_PV", 0)),
+        "consumo": int(site.get("P_Load", 0)),
+        "rete": int(site.get("P_Grid", 0) * -1),
+        "soc": int(inverter.get("SOC", 0)),
+        "timestamp": int(time.time()),
+    }
+
+
+def parse_device_status(device_name, status_response):
+    for item in status_response.get("result", []):
+        if item.get("code") == "switch_1":
+            is_on = bool(item.get("value"))
+            return {
+                "is_on": is_on,
+                "text": f"🔥 {device_name} è ACCESA" if is_on else f"❄️ {device_name} è SPENTA",
+            }
+    return {"is_on": None, "text": f"⚠️ Stato {device_name} non riconosciuto"}
+
+
+def refresh_all_device_states():
+    for device_name, device_id in DEVICES.items():
+        try:
+            status = tuya_request_with_reconnect(openapi.get, f"/v1.0/iot-03/devices/{device_id}/status")
+            parsed = parse_device_status(device_name, status)
+            with runtime_lock:
+                device_states[device_name] = parsed
+        except Exception as e:
+            logging.error("Errore lettura stato %s: %s", device_name, e)
+
+
+def set_device_state(device_name, desired_on):
+    device_id = DEVICES[device_name]
+
+    with runtime_lock:
+        known_state = device_states[device_name]["is_on"]
+
+    if known_state is desired_on:
+        return
+
     try:
-        if device_id==DEVICES["StufaG"]:
-            if command=="on":
-                tuya_request_with_reconnect(
-                    openapi.post,
-                    f"/v1.0/iot-03/devices/{DEVICE_ID}/commands",
-                    {"commands": [{"code": "switch_1", "value": True}]}
-                )
-            else:
-                tuya_request_with_reconnect(
-                    openapi.post,
-                    f"/v1.0/iot-03/devices/{DEVICE_ID}/commands",
-                    {"commands": [{"code": "switch_1", "value": False}]}
-                )
+        tuya_request_with_reconnect(
+            openapi.post,
+            f"/v1.0/iot-03/devices/{device_id}/commands",
+            {"commands": [{"code": "switch_1", "value": desired_on}]},
+        )
+        with runtime_lock:
+            device_states[device_name] = {
+                "is_on": desired_on,
+                "text": f"🔥 {device_name} è ACCESA" if desired_on else f"❄️ {device_name} è SPENTA",
+            }
+    except Exception:
+        logging.warning("⚠️ Codice 'switch_1' non trovato o dispositivo non rintracciabile")
 
-        if device_id==DEVICES["StufaP"]:
-            if command=="on":
-                tuya_request_with_reconnect(
-                    openapi.post,
-                    f"/v1.0/iot-03/devices/{DEVICE_ID2}/commands",
-                    {"commands": [{"code": "switch_1", "value": True}]}
-                )
-            else:
-                tuya_request_with_reconnect(
-                    openapi.post,
-                    f"/v1.0/iot-03/devices/{DEVICE_ID2}/commands",
-                    {"commands": [{"code": "switch_1", "value": False}]}
-                )
 
-    except Exception as e:
-        print("⚠️ Codice 'switch_1' non trovato, dispositivo forse non rintracciabile")
+def compute_targets(p_grid, cfg, current_states):
+    # Isteresi desiderata:
+    # - Accensione con soglie alte (X/Y)
+    # - Spegnimento con soglie basse (D/Z)
+    # In mezzo alle soglie mantiene lo stato precedente.
+    target = {
+        "StufaP": bool(current_states.get("StufaP")),
+        "StufaG": bool(current_states.get("StufaG")),
+    }
 
-def StatoDispositivi(device_idx):
-    status = tuya_request_with_reconnect(
-        openapi.get, f"/v1.0/iot-03/devices/{device_idx}/status"
-    )
-    # Analisi dello stato di StufaP e Stufa G
-    for item in status.get("result", []):
-        if device_idx==DEVICE_ID2:
-            if item["value"] is True:
-                return "🔥 StufaP è ACCESA"
-            elif item["value"] is False:
-                return "❄️ StufaP è SPENTA"
-            else:
-                return "⚠️ Stato Stufa P non riconosciuto"
-            break
-        elif device_idx==DEVICE_ID:
-            if item["value"] is True:
-                return "🔥 StufaG è ACCESA"
-            elif item["value"] is False:
-                return "❄️ StufaG è SPENTA"
-            else:
-                return "⚠️ Stato Stufa G non riconosciuto"
-            break
-    else:
-         return "⚠️ Stato Stufa G non riconosciuto"
+    # Accensione
+    if p_grid > cfg["X"]:
+        target["StufaP"] = True
+    if p_grid > cfg["Y"]:
+        target["StufaG"] = True
 
-# --- Automazione --- quando va in automatico, ogni 30 secondi dentro la fascia oraria stabilita,
-# in base alle soglie di automazione gestisce le due stufe/prese
+    # Spegnimento
+    if p_grid < cfg["Z"]:
+        target["StufaG"] = False
+    if p_grid < cfg["D"]:
+        target["StufaP"] = False
+
+    return target
+
 
 def automazione_loop():
-    start_time = datetime.time(11, 0)
-    end_time = datetime.time(17, 30)
+    start_time = datetime.time(START_HOUR, START_MINUTE)
+    end_time = datetime.time(END_HOUR, END_MINUTE)
+    last_status_refresh = 0
+
     while True:
         now = datetime.datetime.now().time()
-        if start_time <= now <= end_time and auto_mode:
+
+        if time.time() - last_status_refresh >= STATUS_REFRESH_SECONDS:
+            refresh_all_device_states()
+            last_status_refresh = time.time()
+
+        with runtime_lock:
+            is_auto_mode = auto_mode
+            cfg = thresholds.copy()
+
+        if start_time <= now <= end_time and is_auto_mode:
             try:
-                url = f"http://{INVERTER_IP}/solar_api/v1/GetPowerFlowRealtimeData.fcgi"
-                r = requests.get(url, timeout=5)
-                data = r.json()
-                site = data["Body"]["Data"]["Site"]
-                p_grid = site["P_Grid"] * -1
+                power = fetch_inverter_data(timeout=4)
+                with runtime_lock:
+                    latest_power_data.update(power)
 
-                # Accensione
-                if p_grid > thresholds["Y"]:
-                    ComandoPulsante(DEVICES["StufaG"], "on")
-                    ComandoPulsante(DEVICES["StufaP"], "on")
-                elif p_grid > thresholds["X"]:
-                    ComandoPulsante(DEVICES["StufaG"], "off")
+                with runtime_lock:
+                    current_states = {
+                        "StufaP": device_states["StufaP"]["is_on"],
+                        "StufaG": device_states["StufaG"]["is_on"],
+                    }
 
-                # Spegnimento
-                if p_grid < thresholds["Z"]:
-                    ComandoPulsante(DEVICES["StufaG"], "off")
+                targets = compute_targets(power["rete"], cfg, current_states)
+                set_device_state("StufaP", targets["StufaP"])
+                set_device_state("StufaG", targets["StufaG"])
 
-                if p_grid < thresholds["D"]:
-                    logging.info(f"Automazione eseguita con rete: {p_grid} W")
+                logging.info("Automazione: rete=%sW target=%s", power["rete"], targets)
             except Exception as e:
-                logging.error(f"Errore automazione: {e}")
-        time.sleep(30)
+                logging.error("Errore automazione: %s", e)
+
+        time.sleep(POLL_SECONDS)
+
 
 threading.Thread(target=automazione_loop, daemon=True).start()
 
-# --- API ---
+
 @app.route("/data")
 def get_data():
-    url = f"http://{INVERTER_IP}/solar_api/v1/GetPowerFlowRealtimeData.fcgi"
-    try:
-        r = requests.get(url, timeout=5)
-        data = r.json()
-        site = data["Body"]["Data"]["Site"]
-        inverter = data["Body"]["Data"]["Inverters"]["1"]
-        p_grid = site["P_Grid"] * -1
-        resp = {
-            "produzione": site["P_PV"],
-            "consumo": site["P_Load"],
-            "rete": p_grid,
-            "soc": inverter.get("SOC", 0),
-            "stati": {d: StatoDispositivi(DEVICES[d]) for d in DEVICES},
+    with runtime_lock:
+        snapshot = {
+            "produzione": latest_power_data["produzione"],
+            "consumo": latest_power_data["consumo"],
+            "rete": latest_power_data["rete"],
+            "soc": latest_power_data["soc"],
+            "stati": {name: state["text"] for name, state in device_states.items()},
             "auto_mode": auto_mode,
-            "thresholds": thresholds
+            "thresholds": thresholds.copy(),
+            "updated_at": latest_power_data["timestamp"],
         }
-        return jsonify(resp)
+
+    # Aggiornamento on-demand, ma senza fare polling Tuya ad ogni richiesta
+    try:
+        power = fetch_inverter_data(timeout=3)
+        with runtime_lock:
+            latest_power_data.update(power)
+            snapshot.update(
+                {
+                    "produzione": power["produzione"],
+                    "consumo": power["consumo"],
+                    "rete": power["rete"],
+                    "soc": power["soc"],
+                    "updated_at": power["timestamp"],
+                }
+            )
     except Exception as e:
-        return jsonify({"error": str(e)}), 503
+        snapshot["warning"] = f"Dato inverter non aggiornato: {e}"
+
+    return jsonify(snapshot)
+
 
 @app.route("/control", methods=["POST"])
 def control():
     global auto_mode
-    data = request.json
+    data = request.json or {}
     device = data.get("device")
     command = data.get("command")
+
     if device == "auto":
-        auto_mode = (command == "on")
-        logging.info(f"Modalità automatica impostata su: {auto_mode}")
-        return jsonify({"auto_mode": auto_mode})
-    if device in DEVICES:
-        ComandoPulsante(DEVICES[device], command)
+        with runtime_lock:
+            auto_mode = command == "on"
+            value = auto_mode
+        logging.info("Modalità automatica impostata su: %s", value)
+        return jsonify({"auto_mode": value})
+
+    if device in DEVICES and command in {"on", "off"}:
+        set_device_state(device, command == "on")
         return jsonify({"ok": True})
-    return jsonify({"error": "device sconosciuto"}), 400
+
+    return jsonify({"error": "device o comando sconosciuto"}), 400
+
 
 @app.route("/set_thresholds", methods=["POST"])
 def set_thresholds():
     global thresholds
-    thresholds.update(request.json)
-    logging.info(f"Soglie aggiornate: {thresholds}")
-    return jsonify(thresholds)
+    payload = request.json or {}
+    allowed = {"X", "Y", "Z", "D"}
+
+    for key, value in payload.items():
+        if key in allowed:
+            try:
+                payload[key] = int(value)
+            except Exception:
+                return jsonify({"error": f"Valore non valido per {key}"}), 400
+
+    with runtime_lock:
+        thresholds.update({k: v for k, v in payload.items() if k in allowed})
+        result = thresholds.copy()
+
+    logging.info("Soglie aggiornate: %s", result)
+    return jsonify(result)
+
 
 @app.route("/")
 def index():
@@ -209,13 +306,10 @@ def index():
             h1 { color: #333; }
             #data { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom:20px; }
             .item { margin: 8px 0; }
-            .status { padding: 5px 10px; border-radius: 6px; display:inline-block; }
-            .on { background: #4caf50; color:white; }
-            .off { background: #f44336; color:white; }
-            .unreachable { background: #999; color:white; }
+            .status { padding: 5px 10px; border-radius: 6px; display:inline-block; background:#999; color:white; }
             .controls button { margin: 5px; padding: 10px 15px; border: none; border-radius: 6px; cursor: pointer; }
-            .controls .on { background:#4caf50; }
-            .controls .off { background:#f44336; }
+            .controls .on { background:#4caf50; color:white; }
+            .controls .off { background:#f44336; color:white; }
             .controls .auto { background:#2196f3; color:white; }
             .thresholds input { width: 80px; margin: 5px; }
         </style>
@@ -260,7 +354,6 @@ def index():
                     `;
                     for (let dev in json.stati) {
                         let el = document.getElementById("stato-" + dev);
-                        el.className = "status " + json.stati[dev];
                         el.innerText = json.stati[dev];
                     }
                     document.getElementById("auto_mode").innerText = json.auto_mode ? "ON" : "OFF";
@@ -306,6 +399,7 @@ def index():
     </html>
     """
     return render_template_string(html)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
