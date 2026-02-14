@@ -150,21 +150,28 @@ def set_device_state(device_name, desired_on):
         logging.warning("⚠️ Codice 'switch_1' non trovato o dispositivo non rintracciabile")
 
 
-def compute_targets(p_grid, cfg):
-    # Logica soglie:
-    # - sopra Y: entrambe ON
-    # - tra X e Y: solo StufaP ON
-    # - sotto Z: StufaG OFF
-    # - sotto D: entrambe OFF
+def compute_targets(p_grid, cfg, current_states):
+    # Isteresi desiderata:
+    # - Accensione con soglie alte (X/Y)
+    # - Spegnimento con soglie basse (D/Z)
+    # In mezzo alle soglie mantiene lo stato precedente.
     target = {
-        "StufaP": p_grid > cfg["X"],
-        "StufaG": p_grid > cfg["Y"],
+        "StufaP": bool(current_states.get("StufaP")),
+        "StufaG": bool(current_states.get("StufaG")),
     }
+
+    # Accensione
+    if p_grid > cfg["X"]:
+        target["StufaP"] = True
+    if p_grid > cfg["Y"]:
+        target["StufaG"] = True
+
+    # Spegnimento
     if p_grid < cfg["Z"]:
         target["StufaG"] = False
     if p_grid < cfg["D"]:
         target["StufaP"] = False
-        target["StufaG"] = False
+
     return target
 
 
