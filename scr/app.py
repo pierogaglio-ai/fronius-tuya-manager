@@ -381,7 +381,8 @@ def index():
                 background: radial-gradient(circle at 20% 0%, #1e293b, var(--bg));
                 color: var(--text);
             }
-            .header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; }
+            .header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
+            .mobile-stove-strip { display:none; }
             .subtitle { color: var(--muted); font-size: 14px; }
             .badge { background:#1d4ed8; padding:6px 12px; border-radius:999px; font-size:12px; font-weight:700; }
             .grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:14px; }
@@ -416,8 +417,24 @@ def index():
                 .controls, .thresholds { grid-column: span 2; }
             }
             @media (max-width: 720px) {
+                body { padding: 14px; }
+                .header h1 { font-size: 22px; }
                 .grid { grid-template-columns: 1fr; }
                 .controls, .thresholds { grid-column: span 1; }
+                .mobile-stove-strip {
+                    display:flex;
+                    gap:8px;
+                    position: sticky;
+                    top: 8px;
+                    z-index: 50;
+                    margin-bottom: 10px;
+                }
+                .mobile-stove-strip .pill {
+                    flex:1;
+                    text-align:center;
+                    background: #111827;
+                    border:1px solid #334155;
+                }
             }
         </style>
     </head>
@@ -428,6 +445,11 @@ def index():
                 <div class="subtitle">Dashboard locale · Opzione A</div>
             </div>
             <div id="autoBadge" class="badge">AUTO: ?</div>
+        </div>
+
+        <div class="mobile-stove-strip">
+            <div id="stato-StufaP-mobile" class="pill">StufaP: ?</div>
+            <div id="stato-StufaG-mobile" class="pill">StufaG: ?</div>
         </div>
 
         <div class="grid">
@@ -500,8 +522,12 @@ def index():
                     document.getElementById('grid').innerText = `${json.rete} W`;
                     document.getElementById('soc').innerText = `${json.soc} %`;
 
-                    setStatusPill('stato-StufaP', json.stati?.StufaP || 'StufaP: ?');
-                    setStatusPill('stato-StufaG', json.stati?.StufaG || 'StufaG: ?');
+                    const stufaPText = json.stati?.StufaP || 'StufaP: ?';
+                    const stufaGText = json.stati?.StufaG || 'StufaG: ?';
+                    setStatusPill('stato-StufaP', stufaPText);
+                    setStatusPill('stato-StufaG', stufaGText);
+                    setStatusPill('stato-StufaP-mobile', stufaPText);
+                    setStatusPill('stato-StufaG-mobile', stufaGText);
 
                     const t = json.thermometer || {};
                     document.getElementById('temp').innerText = t.temperature_c == null ? '-- °C' : `${t.temperature_c.toFixed(1)} °C`;
