@@ -29,8 +29,8 @@ DEVICES = {
 THERMOMETER_DEVICE_ID = os.getenv("TUYA_DEVICE_ID_TERMOMETRO", "")
 
 # Polling e finestra automazione (ottimizzati per stabilità su Termux)
-POLL_SECONDS = int(os.getenv("POLL_SECONDS", "20"))
-STATUS_REFRESH_SECONDS = int(os.getenv("STATUS_REFRESH_SECONDS", "60"))
+POLL_SECONDS = int(os.getenv("POLL_SECONDS", "60"))
+STATUS_REFRESH_SECONDS = int(os.getenv("STATUS_REFRESH_SECONDS", "90"))
 START_HOUR = int(os.getenv("AUTO_START_HOUR", "11"))
 START_MINUTE = int(os.getenv("AUTO_START_MINUTE", "0"))
 END_HOUR = int(os.getenv("AUTO_END_HOUR", "17"))
