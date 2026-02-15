@@ -441,8 +441,7 @@ def index():
     <body>
         <div class="header">
             <div>
-                <h1 style="margin:0;">Fronius Monitor</h1>
-                <div class="subtitle">Dashboard locale · Opzione A</div>
+                <h1 style="margin:0;">Mio HUB</h1>
             </div>
             <div id="autoBadge" class="badge">AUTO: ?</div>
         </div>
