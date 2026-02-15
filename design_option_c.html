@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Option C - Energy Focus</title>
+  <style>
+    :root { --bg:#020617; --card:#0b1220; --txt:#e5e7eb; --muted:#9ca3af; --accent:#a78bfa; }
+    body { margin:0; font-family: Inter, system-ui, sans-serif; background:var(--bg); color:var(--txt); }
+    .container { max-width:1100px; margin:0 auto; padding:26px; }
+    .hero { background:linear-gradient(145deg,#111827,#1e1b4b); border:1px solid #312e81; border-radius:20px; padding:20px; margin-bottom:16px; }
+    .hero h1 { margin:0 0 6px; }
+    .hero p { margin:0; color:#c4b5fd; }
+    .big { font-size:48px; font-weight:800; margin:12px 0 0; }
+    .smallgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:14px; }
+    .mini { background:rgba(15,23,42,.65); border:1px solid #1f2937; border-radius:12px; padding:12px; }
+    .layout { display:grid; grid-template-columns: 1.2fr 1fr; gap:16px; }
+    .panel { background:var(--card); border:1px solid #1f2937; border-radius:14px; padding:16px; }
+    .device { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid #1f2937; }
+    .btn { padding:7px 10px; border-radius:8px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; }
+    .btn.primary { background:#7c3aed; border-color:#8b5cf6; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="hero">
+      <h1>Fronius Dashboard · Option C</h1>
+      <p>Design focalizzato sul flusso energetico e sul contesto decisionale.</p>
+      <div class="big">+1.4 kW <span style="font-size:20px;color:var(--muted)">surplus rete</span></div>
+      <div class="smallgrid">
+        <div class="mini"><div style="color:var(--muted)">Produzione</div><b>3.2 kW</b></div>
+        <div class="mini"><div style="color:var(--muted)">Consumo</div><b>1.8 kW</b></div>
+        <div class="mini"><div style="color:var(--muted)">Batteria</div><b>76%</b></div>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div class="panel">
+        <h3 style="margin-top:0">Automazione e soglie</h3>
+        <p style="color:var(--muted)">Modalità automatica: <b style="color:#86efac">ATTIVA</b></p>
+        <div class="smallgrid" style="grid-template-columns:repeat(4,1fr)">
+          <div class="mini">X<br><b>500W</b></div>
+          <div class="mini">Y<br><b>1000W</b></div>
+          <div class="mini">Z<br><b>800W</b></div>
+          <div class="mini">D<br><b>200W</b></div>
+        </div>
+        <button class="btn primary" style="margin-top:12px">Modifica soglie</button>
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0">Controllo rapido</h3>
+        <div class="device"><span>🔥 StufaP · Accesa</span><div><button class="btn primary">ON</button> <button class="btn">OFF</button></div></div>
+        <div class="device" style="border-bottom:none"><span>❄️ StufaG · Spenta</span><div><button class="btn">ON</button> <button class="btn primary">OFF</button></div></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

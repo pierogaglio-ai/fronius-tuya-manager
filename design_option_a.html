@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Option A - Card Grid</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #111827;
+      --muted: #94a3b8;
+      --text: #e2e8f0;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --accent: #38bdf8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: radial-gradient(circle at 20% 0%, #1e293b, var(--bg));
+      color: var(--text);
+      padding: 24px;
+    }
+    .header { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; }
+    .badge { background:#1d4ed8; color:white; padding:6px 12px; border-radius:999px; font-size:12px; }
+    .grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:16px; }
+    .card {
+      background: linear-gradient(180deg, #0b1220, var(--card));
+      border: 1px solid #1f2937;
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+    .label { color: var(--muted); font-size: 13px; margin-bottom:8px; }
+    .value { font-size: 30px; font-weight: 700; }
+    .controls { grid-column: span 2; }
+    .status { display:flex; gap:10px; margin-top:10px; }
+    .pill { padding:8px 12px; border-radius:10px; font-weight:600; font-size:13px; }
+    .on { background: rgba(34,197,94,.2); color:#86efac; border:1px solid rgba(34,197,94,.5); }
+    .off { background: rgba(239,68,68,.15); color:#fca5a5; border:1px solid rgba(239,68,68,.4); }
+    button {
+      background: #0ea5e9; border:none; color:white; padding:10px 14px;
+      border-radius:10px; cursor:pointer; font-weight:600; margin-right:8px; margin-top:8px;
+    }
+    .secondary { background:#334155; }
+    @media (max-width: 1000px) { .grid { grid-template-columns: 1fr 1fr; } .controls { grid-column: span 2; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1 style="margin:0">Fronius Dashboard · Option A</h1>
+      <div style="color:var(--muted)">Layout a card, immediato e pulito</div>
+    </div>
+    <div class="badge">AUTO: ON</div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="label">Produzione FV</div><div class="value">3.2 <small>kW</small></div></div>
+    <div class="card"><div class="label">Consumo Casa</div><div class="value">1.8 <small>kW</small></div></div>
+    <div class="card"><div class="label">Immissione in Rete</div><div class="value" style="color:var(--ok)">1.4 <small>kW</small></div></div>
+    <div class="card"><div class="label">Batteria SOC</div><div class="value">76 <small>%</small></div></div>
+
+    <div class="card controls">
+      <div class="label">Dispositivi</div>
+      <div class="status">
+        <div class="pill on">🔥 StufaP Accesa</div>
+        <div class="pill off">❄️ StufaG Spenta</div>
+      </div>
+      <div>
+        <button>StufaP ON</button><button class="secondary">StufaP OFF</button>
+      </div>
+      <div>
+        <button>StufaG ON</button><button class="secondary">StufaG OFF</button>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: span 2;">
+      <div class="label">Soglie automazione (W)</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px;">
+        <div>X: <b>500</b></div><div>Y: <b>1000</b></div><div>Z: <b>800</b></div><div>D: <b>200</b></div>
+      </div>
+      <button style="margin-top:14px;background:#22c55e">Salva soglie</button>
+    </div>
+  </div>
+</body>
+</html>
