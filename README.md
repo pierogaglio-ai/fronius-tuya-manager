@@ -22,6 +22,7 @@ Questo progetto permette di monitorare un inverter **Fronius GEN24 Plus** e auto
 - `TUYA_ACCESS_SECRET`
 - `TUYA_DEVICE_ID_STUFAG`
 - `TUYA_DEVICE_ID_STUFAP`
+- `TUYA_DEVICE_ID_TERMOMETRO` (opzionale, per monitorare temperatura/umidità da un sensore Tuya)
 - `POLL_SECONDS` (default: `20`)
 - `STATUS_REFRESH_SECONDS` (default: `60`)
 - `AUTO_START_HOUR`, `AUTO_START_MINUTE`

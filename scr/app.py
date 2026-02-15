@@ -26,6 +26,8 @@ DEVICES = {
     "StufaG": DEVICE_ID,
 }
 
+THERMOMETER_DEVICE_ID = os.getenv("TUYA_DEVICE_ID_TERMOMETRO", "")
+
 # Polling e finestra automazione (ottimizzati per stabilità su Termux)
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "20"))
 STATUS_REFRESH_SECONDS = int(os.getenv("STATUS_REFRESH_SECONDS", "60"))
@@ -59,6 +61,15 @@ latest_power_data = {
 device_states = {
     "StufaP": {"is_on": None, "text": "⚠️ Stato StufaP non disponibile"},
     "StufaG": {"is_on": None, "text": "⚠️ Stato StufaG non disponibile"},
+}
+
+thermometer_data = {
+    "available": bool(THERMOMETER_DEVICE_ID),
+    "name": "Termometro",
+    "temperature_c": None,
+    "humidity": None,
+    "updated_at": 0,
+    "warning": "Termometro non configurato" if not THERMOMETER_DEVICE_ID else None,
 }
 
 # Logging
@@ -126,6 +137,55 @@ def refresh_all_device_states():
             logging.error("Errore lettura stato %s: %s", device_name, e)
 
 
+def _scaled_number(raw_value):
+    if raw_value is None:
+        return None
+    try:
+        value = float(raw_value)
+    except Exception:
+        return None
+    if value > 1000:
+        return value / 100
+    if value > 100:
+        return value / 10
+    return value
+
+
+def parse_thermometer_status(status_response):
+    result = {"temperature_c": None, "humidity": None}
+    for item in status_response.get("result", []):
+        code = item.get("code")
+        value = item.get("value")
+        if code in {"temp_current", "va_temperature", "cur_temperature", "temperature"}:
+            result["temperature_c"] = _scaled_number(value)
+        elif code in {"humidity_value", "va_humidity", "cur_humidity", "humidity"}:
+            result["humidity"] = _scaled_number(value)
+    return result
+
+
+def refresh_thermometer_state():
+    if not THERMOMETER_DEVICE_ID:
+        return
+
+    try:
+        status = tuya_request_with_reconnect(openapi.get, f"/v1.0/iot-03/devices/{THERMOMETER_DEVICE_ID}/status")
+        parsed = parse_thermometer_status(status)
+        with runtime_lock:
+            thermometer_data.update(
+                {
+                    "available": True,
+                    "temperature_c": parsed["temperature_c"],
+                    "humidity": parsed["humidity"],
+                    "updated_at": int(time.time()),
+                    "warning": None if parsed["temperature_c"] is not None or parsed["humidity"] is not None else "Nessun dato termometro trovato nello status Tuya",
+                }
+            )
+    except Exception as e:
+        logging.error("Errore lettura termometro: %s", e)
+        with runtime_lock:
+            thermometer_data.update({"available": True, "warning": str(e)})
+
+
 def set_device_state(device_name, desired_on):
     device_id = DEVICES[device_name]
 
@@ -185,11 +245,13 @@ def automazione_loop():
 
         if time.time() - last_status_refresh >= STATUS_REFRESH_SECONDS:
             refresh_all_device_states()
+            refresh_thermometer_state()
             last_status_refresh = time.time()
 
         with runtime_lock:
             is_auto_mode = auto_mode
             cfg = thresholds.copy()
+            current_states = {name: state["is_on"] for name, state in device_states.items()}
 
         if start_time <= now <= end_time and is_auto_mode:
             try:
@@ -197,7 +259,7 @@ def automazione_loop():
                 with runtime_lock:
                     latest_power_data.update(power)
 
-                targets = compute_targets(power["rete"], cfg)
+                targets = compute_targets(power["rete"], cfg, current_states)
                 set_device_state("StufaP", targets["StufaP"])
                 set_device_state("StufaG", targets["StufaG"])
 
@@ -222,6 +284,7 @@ def get_data():
             "stati": {name: state["text"] for name, state in device_states.items()},
             "auto_mode": auto_mode,
             "thresholds": thresholds.copy(),
+            "thermometer": thermometer_data.copy(),
             "updated_at": latest_power_data["timestamp"],
         }
 
@@ -249,10 +312,12 @@ def get_data():
 def control():
     global auto_mode
     data = request.json or {}
-    device = data.get("device")
-    command = data.get("command")
+    device = str(data.get("device", "")).strip()
+    command = str(data.get("command", "")).strip().lower()
 
     if device == "auto":
+        if command not in {"on", "off"}:
+            return jsonify({"error": "comando auto non valido"}), 400
         with runtime_lock:
             auto_mode = command == "on"
             value = auto_mode
@@ -260,8 +325,9 @@ def control():
         return jsonify({"auto_mode": value})
 
     if device in DEVICES and command in {"on", "off"}:
+        logging.info("Comando manuale dispositivo: %s -> %s", device, command)
         set_device_state(device, command == "on")
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "device": device, "command": command})
 
     return jsonify({"error": "device o comando sconosciuto"}), 400
 
@@ -291,101 +357,202 @@ def set_thresholds():
 def index():
     html = """
     <!DOCTYPE html>
-    <html>
+    <html lang="it">
     <head>
-        <title>Fronius Monitor</title>
+        <title>Fronius Dashboard</title>
         <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
         <style>
-            body { font-family: Arial; background: #f4f4f4; padding: 20px; }
-            h1 { color: #333; }
-            #data { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom:20px; }
-            .item { margin: 8px 0; }
-            .status { padding: 5px 10px; border-radius: 6px; display:inline-block; background:#999; color:white; }
-            .controls button { margin: 5px; padding: 10px 15px; border: none; border-radius: 6px; cursor: pointer; }
-            .controls .on { background:#4caf50; color:white; }
-            .controls .off { background:#f44336; color:white; }
-            .controls .auto { background:#2196f3; color:white; }
-            .thresholds input { width: 80px; margin: 5px; }
+            :root {
+                --bg: #0f172a;
+                --card: #111827;
+                --line: #1f2937;
+                --muted: #94a3b8;
+                --text: #e2e8f0;
+                --ok: #22c55e;
+                --off: #ef4444;
+                --accent: #0ea5e9;
+            }
+            * { box-sizing: border-box; }
+            body {
+                margin: 0;
+                padding: 24px;
+                font-family: Inter, Arial, sans-serif;
+                background: radial-gradient(circle at 20% 0%, #1e293b, var(--bg));
+                color: var(--text);
+            }
+            .header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; }
+            .subtitle { color: var(--muted); font-size: 14px; }
+            .badge { background:#1d4ed8; padding:6px 12px; border-radius:999px; font-size:12px; font-weight:700; }
+            .grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:14px; }
+            .card {
+                background: linear-gradient(180deg, #0b1220, var(--card));
+                border: 1px solid var(--line);
+                border-radius: 14px;
+                padding: 14px;
+                box-shadow: 0 10px 25px rgba(0,0,0,.25);
+            }
+            .label { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+            .value { font-size: 30px; font-weight: 700; }
+            .controls, .thresholds { grid-column: span 2; }
+            .status-wrap { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0; }
+            .pill { padding:7px 10px; border-radius:999px; font-size:13px; font-weight:700; }
+            .pill-on { background: rgba(34,197,94,.2); border:1px solid rgba(34,197,94,.45); color: #86efac; }
+            .pill-off { background: rgba(239,68,68,.15); border:1px solid rgba(239,68,68,.45); color: #fca5a5; }
+            button {
+                border:none; border-radius:10px; cursor:pointer; padding:9px 12px;
+                font-weight:700; margin:4px 4px 0 0; color:#fff; background:var(--accent);
+            }
+            button.secondary { background:#334155; }
+            button.ok { background:#16a34a; }
+            .th-grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:8px; }
+            .th-item input {
+                width: 100%; margin-top: 4px; padding: 8px; border-radius: 8px;
+                border: 1px solid #334155; background:#0b1220; color: var(--text);
+            }
+            .warning { color:#fca5a5; font-size: 13px; }
+            @media (max-width: 1080px) {
+                .grid { grid-template-columns: 1fr 1fr; }
+                .controls, .thresholds { grid-column: span 2; }
+            }
+            @media (max-width: 720px) {
+                .grid { grid-template-columns: 1fr; }
+                .controls, .thresholds { grid-column: span 1; }
+            }
         </style>
     </head>
     <body>
-        <h1>Fronius Monitor</h1>
-        <div id="data">Caricamento...</div>
-        <h2>Controllo manuale</h2>
-        <div class="controls">
-            <div><b>StufaP:</b>
-                <button class="on" onclick="sendCmd('StufaP','on')">ON</button>
-                <button class="off" onclick="sendCmd('StufaP','off')">OFF</button>
-                <span id="stato-StufaP" class="status">?</span>
+        <div class="header">
+            <div>
+                <h1 style="margin:0;">Fronius Monitor</h1>
+                <div class="subtitle">Dashboard locale · Opzione A</div>
             </div>
-            <div><b>StufaG:</b>
-                <button class="on" onclick="sendCmd('StufaG','on')">ON</button>
-                <button class="off" onclick="sendCmd('StufaG','off')">OFF</button>
-                <span id="stato-StufaG" class="status">?</span>
+            <div id="autoBadge" class="badge">AUTO: ?</div>
+        </div>
+
+        <div class="grid">
+            <div class="card"><div class="label">Produzione FV</div><div id="pv" class="value">-- W</div></div>
+            <div class="card"><div class="label">Consumo Casa</div><div id="load" class="value">-- W</div></div>
+            <div class="card"><div class="label">Immissione in Rete</div><div id="grid" class="value">-- W</div></div>
+            <div class="card"><div class="label">Batteria SOC</div><div id="soc" class="value">-- %</div></div>
+
+            <div class="card">
+                <div class="label">Termometro ambiente</div>
+                <div id="temp" class="value" style="font-size:26px;">-- °C</div>
+                <div id="hum" class="subtitle">Umidità: -- %</div>
+                <div id="thermoWarn" class="warning"></div>
+            </div>
+
+            <div class="card controls">
+                <div class="label">Dispositivi</div>
+                <div class="status-wrap">
+                    <div id="stato-StufaP" class="pill">StufaP: ?</div>
+                    <div id="stato-StufaG" class="pill">StufaG: ?</div>
+                </div>
+                <div>
+                    <button type="button" onclick="sendCmd('StufaP','on')">StufaP ON</button>
+                    <button type="button" class="secondary" onclick="sendCmd('StufaP','off')">StufaP OFF</button>
+                </div>
+                <div>
+                    <button type="button" onclick="sendCmd('StufaG','on')">StufaG ON</button>
+                    <button type="button" class="secondary" onclick="sendCmd('StufaG','off')">StufaG OFF</button>
+                </div>
+                <div style="margin-top:8px;">
+                    <button type="button" id="autoOnBtn" onclick="setAutoMode(true)">Automatico ON</button>
+                    <button type="button" id="autoOffBtn" class="secondary" onclick="setAutoMode(false)">Automatico OFF</button>
+                </div>
+            </div>
+
+            <div class="card thresholds">
+                <div class="label">Soglie automazione (W)</div>
+                <div class="th-grid">
+                    <div class="th-item">X <input id="X" type="number"></div>
+                    <div class="th-item">Y <input id="Y" type="number"></div>
+                    <div class="th-item">Z <input id="Z" type="number"></div>
+                    <div class="th-item">D <input id="D" type="number"></div>
+                </div>
+                <button type="button" class="ok" style="margin-top:10px;" onclick="saveThresholds()">Salva soglie</button>
             </div>
         </div>
-        <h2>Automatismo</h2>
-        <button class="auto" onclick="toggleAuto()">Attiva/Disattiva Automatico</button>
-        <div>Stato automatico: <span id="auto_mode">?</span></div>
-        <h3>Soglie</h3>
-        <div class="thresholds">
-            X: <input id="X" type="number"> W <br>
-            Y: <input id="Y" type="number"> W <br>
-            Z: <input id="Z" type="number"> W <br>
-            D: <input id="D" type="number"> W <br>
-            <button onclick="saveThresholds()">Salva</button>
-        </div>
+
         <script>
+            let autoModeState = null;
+
+            function setStatusPill(elementId, text) {
+                const el = document.getElementById(elementId);
+                el.innerText = text;
+                if ((text || "").includes("ACCESA")) {
+                    el.className = "pill pill-on";
+                } else if ((text || "").includes("SPENTA")) {
+                    el.className = "pill pill-off";
+                } else {
+                    el.className = "pill";
+                }
+            }
+
             async function fetchData() {
                 try {
                     const res = await fetch('/data');
                     const json = await res.json();
-                    document.getElementById('data').innerHTML = `
-                        <div class="item"><b>Produzione FV:</b> ${json.produzione} W</div>
-                        <div class="item"><b>Consumo Casa:</b> ${json.consumo} W</div>
-                        <div class="item"><b>Immissione in Rete:</b> ${json.rete} W</div>
-                        <div class="item"><b>SOC Batteria:</b> ${json.soc} %</div>
-                    `;
-                    for (let dev in json.stati) {
-                        let el = document.getElementById("stato-" + dev);
-                        el.innerText = json.stati[dev];
-                    }
-                    document.getElementById("auto_mode").innerText = json.auto_mode ? "ON" : "OFF";
+
+                    document.getElementById('pv').innerText = `${json.produzione} W`;
+                    document.getElementById('load').innerText = `${json.consumo} W`;
+                    document.getElementById('grid').innerText = `${json.rete} W`;
+                    document.getElementById('soc').innerText = `${json.soc} %`;
+
+                    setStatusPill('stato-StufaP', json.stati?.StufaP || 'StufaP: ?');
+                    setStatusPill('stato-StufaG', json.stati?.StufaG || 'StufaG: ?');
+
+                    const t = json.thermometer || {};
+                    document.getElementById('temp').innerText = t.temperature_c == null ? '-- °C' : `${t.temperature_c.toFixed(1)} °C`;
+                    document.getElementById('hum').innerText = t.humidity == null ? 'Umidità: -- %' : `Umidità: ${t.humidity.toFixed(1)} %`;
+                    document.getElementById('thermoWarn').innerText = t.warning || '';
+
+                    autoModeState = Boolean(json.auto_mode);
+                    const autoText = autoModeState ? 'AUTO: ON' : 'AUTO: OFF';
+                    document.getElementById('autoBadge').innerText = autoText;
+
                     for (let k in json.thresholds) {
-                        document.getElementById(k).value = json.thresholds[k];
+                        const el = document.getElementById(k);
+                        if (el) el.value = json.thresholds[k];
                     }
                 } catch (e) {
-                    document.getElementById('data').innerText = 'Errore di connessione';
+                    document.getElementById('thermoWarn').innerText = 'Errore di connessione al backend';
                 }
             }
+
             function sendCmd(device, cmd) {
+                if (!device || device === "auto") return;
                 fetch('/control', {
-                    method:'POST',
-                    headers:{'Content-Type':'application/json'},
-                    body: JSON.stringify({device:device, command:cmd})
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({device: device, command: cmd})
                 }).then(fetchData);
             }
-            function toggleAuto() {
-                const cmd = document.getElementById("auto_mode").innerText === "ON" ? "off" : "on";
+
+            function setAutoMode(enabled) {
+                const cmd = enabled ? 'on' : 'off';
                 fetch('/control', {
-                    method:'POST',
-                    headers:{'Content-Type':'application/json'},
-                    body: JSON.stringify({device:"auto", command:cmd})
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({device: 'auto', command: cmd})
                 }).then(fetchData);
             }
+
             function saveThresholds() {
-                let payload = {
-                    X: parseInt(document.getElementById("X").value),
-                    Y: parseInt(document.getElementById("Y").value),
-                    Z: parseInt(document.getElementById("Z").value),
-                    D: parseInt(document.getElementById("D").value)
+                const payload = {
+                    X: parseInt(document.getElementById('X').value),
+                    Y: parseInt(document.getElementById('Y').value),
+                    Z: parseInt(document.getElementById('Z').value),
+                    D: parseInt(document.getElementById('D').value)
                 };
                 fetch('/set_thresholds', {
-                    method:'POST',
-                    headers:{'Content-Type':'application/json'},
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
                     body: JSON.stringify(payload)
                 }).then(fetchData);
             }
+
             setInterval(fetchData, 30000);
             fetchData();
         </script>
