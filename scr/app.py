@@ -11,7 +11,7 @@ import time
 import requests
 
 # Configurazione x Inverter Fronius Gen24Plus
-INVERTER_IP = os.getenv("INVERTER_IP", "192.168.1.100")
+INVERTER_IP = os.getenv("INVERTER_IP", "192.168.1.130")
 
 # Credenziali Tuya e dati dispositivi
 API_ENDPOINT = os.getenv("TUYA_API_ENDPOINT", "https://openapi.tuyaeu.com")
